@@ -81,57 +81,21 @@ the largest burst of unexpected layout shifts during the lifetime of a page.
 These scores are computed from the {{LayoutShift}} entries this specification
 exposes, but are not themselves exposed by the API.
 
-Only entries whose {{LayoutShift/hadRecentInput}} is false contribute to the score.
-Process those entries in order of their {{PerformanceEntry/startTime}}, rather
-than the time the observer callback runs.
-
-A <dfn export>layout shift session window</dfn> starts with the first eligible shift.
-Each later eligible shift joins the current window if it occurs less than
-1,000 milliseconds after the previous eligible shift and less than
-5,000 milliseconds after the first shift in that window.
-Otherwise, it starts a new window.
-A gap of exactly 1,000 milliseconds, or a shift exactly 5,000 milliseconds after
-the first shift, starts a new window.
-Excluded entries do not extend a window.
-The score of a window is the sum of its contributing [=layout shift values=].
+The <a href="https://github.com/WICG/layout-instability/blob/main/cls-explainer.md">CLS explainer</a>
+describes the session-window calculation and reporting, with an example for one document.
+Only entries whose {{LayoutShift/hadRecentInput}} is false contribute to these scores.
 
 * The <dfn export>document cumulative layout shift (DCLS) score</dfn> is the
-    largest [=layout shift session window=] score inside a single
+    largest session-window score inside a single
     [=browsing context=], or zero if there are no eligible shifts.
     It does not include shifts inside descendant browsing contexts.
 * The <dfn export>cumulative layout shift (CLS) score</dfn> is the largest
-    [=layout shift session window=] score for a [=top-level browsing context=]
+    session-window score for a [=top-level browsing context=]
     and its [=descendant browsing contexts=], or zero if there are no eligible shifts.
-    Combine the eligible shifts into one timeline, with times expressed relative
-    to the same origin, before forming windows.
-    Each shift in the top-level context contributes its [=layout shift value=].
-    Each shift in a descendant context contributes its [=layout shift value=]
-    multiplied by the [=subframe weighting factor=].
+    Shifts in descendant contexts are weighted by the [=subframe weighting factor=].
 * The <dfn export>subframe weighting factor</dfn> for a [=layout shift value=]
     in a [=child browsing context=] is the fraction of the top-level [=viewport=]
     that is occupied by the [=viewport=] of the child browsing context.
-
-For example, shifts with values 0.1 and 0.2 at 100 and 600 milliseconds form a
-window with score 0.3.
-A shift with value 0.25 at 1,600 milliseconds starts a new window, so the score
-remains 0.3 rather than increasing to 0.55.
-Keep the largest window score as later shifts arrive.
-
-A {{PerformanceObserver}} in one document does not receive the entries from its
-child frames, so the <a href="#example">usage example</a> computes DCLS for the
-observed document.
-Computing CLS needs the weighted shifts from the descendant contexts too.
-Adding the largest scores from separate documents would combine windows that
-might have occurred at different times.
-
-Report the largest score seen so far on {{Document/visibilitychange}} when the
-document becomes hidden, after processing any pending observer records.
-If the user returns to the page, continue observing and report again when it
-becomes hidden next.
-The example illustrates windowing, rather than every part of a production
-measurement. Page lifecycle handling, including starting a new measurement after
-restoration from the back/forward cache, is described in the
-<a href="https://web.dev/articles/cls#measure_cls_in_javascript">CLS measurement guidance</a>.
 
 Source attribution {#source-attribution}
 ----------------------------------------
@@ -162,34 +126,21 @@ Usage example {#example}
 
 <em>This section is non-normative.</em>
 
+This example collects entries and reports their sources in the observed document.
+It includes entries with recent input, recording the flag for later filtering.
+The <a href="https://github.com/WICG/layout-instability/blob/main/cls-explainer.md#example-for-one-document">CLS explainer example</a>
+shows how to compute a document score from these entries.
+
 <pre class="example highlight">
     let perFrameLayoutShiftData = [];
-    let documentCumulativeLayoutShiftScore = 0;
-    let sessionScore = 0;
-    let sessionStartTime;
-    let previousShiftTime;
 
-    function updateDCLS(entries) {
+    function collectLayoutShifts(entries) {
       for (const entry of entries) {
-        // Only count layout shifts without recent user input.
-        if (entry.hadRecentInput)
-          continue;
-
         perFrameLayoutShiftData.push({
           score: entry.value,
-          timestamp: entry.startTime
+          timestamp: entry.startTime,
+          hadRecentInput: entry.hadRecentInput
         });
-        if (previousShiftTime !== undefined &&
-            entry.startTime - previousShiftTime < 1000 &&
-            entry.startTime - sessionStartTime < 5000) {
-          sessionScore += entry.value;
-        } else {
-          sessionScore = entry.value;
-          sessionStartTime = entry.startTime;
-        }
-        previousShiftTime = entry.startTime;
-        documentCumulativeLayoutShiftScore = Math.max(
-          documentCumulativeLayoutShiftScore, sessionScore);
 
         // Sources are sorted by impact area in descending order.
         // The first element contributed most to the layout shift.
@@ -201,19 +152,19 @@ Usage example {#example}
 
     // Observe all layout shift occurrences.
     const observer = new PerformanceObserver((list) => {
-      updateDCLS(list.getEntries());
+      collectLayoutShifts(list.getEntries());
     });
     observer.observe({type: 'layout-shift', buffered: true});
 
-    // Report the current score each time the page becomes hidden.
+    // Report the collected entries each time the page becomes hidden.
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         // Force any pending records to be dispatched.
-        updateDCLS(observer.takeRecords());
+        collectLayoutShifts(observer.takeRecords());
 
         // Send data to your analytics back end (assumes `sendToAnalytics` is
         // defined elsewhere).
-        sendToAnalytics({perFrameLayoutShiftData, documentCumulativeLayoutShiftScore});
+        sendToAnalytics({perFrameLayoutShiftData});
       }
     });
 </pre>
